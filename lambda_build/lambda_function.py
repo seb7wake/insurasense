@@ -50,7 +50,8 @@ def process(event, context):
             store_chunks_in_supabase(supabase_client, chunks, s3_key)
 
             plan_id = save_plan_insurer_data(s3_key, supabase_client)
-            save_financial_data(plan_id, s3_key, supabase_client)
+            save_premiums_and_deductibles(plan_id, s3_key, supabase_client)
+            save_copays_and_prescriptions(plan_id, s3_key, supabase_client)
             save_coverage_data(plan_id, s3_key, supabase_client)
             update_job_status(job_id, "completed")
         except Exception as e:
@@ -178,9 +179,19 @@ def save_plan_insurer_data(s3_key: str, vector_db_client: Client) -> str:
         }
     """
     print("embedding response")
+    input_text = """
+        Extract the following information from the health insurance plan:
+        - Plan Name
+        - Insurer Name
+        - Insurer Phone Number
+        - Insurer Address
+        - Insurer Website
+        - Insurance Plan Type (PPO, HMO, POS, etc)
+        - Coverage Year
+    """
     embedding_response = openai.embeddings.create(
         model="text-embedding-ada-002",
-        input="Please extract the plan name, insurer name, insurer phone number, insurer address, insurer website, insurance plan type (PPO, HMO, POS, etc), and coverage year."
+        input=input_text
     )
     embedding_vector = embedding_response.data[0].embedding
 
@@ -237,7 +248,7 @@ def save_plan_insurer_data(s3_key: str, vector_db_client: Client) -> str:
     plan_id = plan_result.data[0]["id"]
     return plan_id
 
-def save_financial_data(plan_id: str, s3_key: str, vector_db_client: Client):
+def save_premiums_and_deductibles(plan_id: str, s3_key: str, vector_db_client: Client):
     db_client = get_supabase_client()
     json_structure = """
         {
@@ -251,23 +262,25 @@ def save_financial_data(plan_id: str, s3_key: str, vector_db_client: Client):
                 "familyInNetwork": 4000,
                 "individualOopMax": 6000,
                 "familyOopMax": 12000
-            },
-            "copays": {
-                "primaryCare": 20,
-                "specialist": 40,
-                "er": 300,
-                "urgentCare": 75,
-                "prescriptionDrugs": {
-                    "tier1Generic": 10,
-                    "tier2Preferred": 30,
-                    "tier3NonPreferred": 50
-                }
             }
         }
     """
     embedding_response = openai.embeddings.create(
         model="text-embedding-ada-002",
-        input="Please extract the premium, deductibles, copays, and prescription drugs information from the plan and their cost ($)."
+        input="""
+        Extract the following financial information from the health insurance plan:
+
+        - Premiums: 
+        - Monthly Premium
+        - Annual Premium
+        - Employer Contribution
+        - Deductibles (In-Network): 
+        - Individual Deductible
+        - Family Deductible
+        - Individual Out-of-Pocket Maximum
+        - Family Out-of-Pocket Maximum
+        Include the dollar amounts for each field (do not include the dollar sign).
+        """
     )
     embedding_vector = embedding_response.data[0].embedding
 
@@ -276,16 +289,16 @@ def save_financial_data(plan_id: str, s3_key: str, vector_db_client: Client):
         {
             'query_embedding': embedding_vector,
             'match_threshold': 0.6,
-            'match_count': 5,
+            'match_count': 6,
             'file_name': s3_key
         }
     ).execute()
-    print("financial embeddings: ", embeddings)
+    print("premium/deductible embeddings: ", embeddings)
 
     json_result = get_json_result(embeddings, json_structure)
     financial_dict = json.loads(json_result)
 
-    print("saving financial data: ", financial_dict)
+    print("saving financial data 1: ", financial_dict)
 
     # Save premium data
     premium_result = db_client.from_("Premium").insert({
@@ -311,8 +324,66 @@ def save_financial_data(plan_id: str, s3_key: str, vector_db_client: Client):
     }).execute()
     deductibles_id = deductibles_result.data[0]["id"]
 
+    # Update HealthPlan with premium and deductible IDs
+    db_client.from_("HealthPlan").update({
+        "premiumId": premium_id,
+        "deductiblesId": deductibles_id,
+        "updatedAt": datetime.now().isoformat()
+    }).eq("id", plan_id).execute()
+
+    return premium_id, deductibles_id
+
+def save_copays_and_prescriptions(plan_id: str, s3_key: str, vector_db_client: Client):
+    db_client = get_supabase_client()
+    json_structure = """
+        {
+            "copays": {
+                "primaryCare": 20,
+                "specialist": 40,
+                "er": 300,
+                "urgentCare": 75,
+                "prescriptionDrugs": {
+                    "tier1Generic": 10,
+                    "tier2Preferred": 30,
+                    "tier3NonPreferred": 50
+                }
+            }
+        }
+    """
+    embedding_response = openai.embeddings.create(
+        model="text-embedding-ada-002",
+        input="""
+        Extract the following copay information from the health insurance plan:
+        - Copays:
+        - Primary Care
+        - Specialist
+        - ER Visits
+        - Urgent Care
+        - Prescription Drugs:
+            - Tier 1 Generic
+            - Tier 2 Preferred
+            - Tier 3 Non-Preferred
+        Include the dollar amounts for each field (do not include the dollar sign).
+        """
+    )
+    embedding_vector = embedding_response.data[0].embedding
+
+    embeddings = vector_db_client.rpc(
+        'match_documents', 
+        {
+            'query_embedding': embedding_vector,
+            'match_threshold': 0.6,
+            'match_count': 6,
+            'file_name': s3_key
+        }
+    ).execute()
+    print("copays embeddings: ", embeddings)
+
+    json_result = get_json_result(embeddings, json_structure)
+    financial_dict = json.loads(json_result)
+
     # Save copays data
-    print("saving copays: ", financial_dict["copays"])
+    print("saving copays: ", financial_dict)
     copays_result = db_client.from_("Copays").insert({
         "id": str(uuid.uuid4()),
         "primaryCare": financial_dict["copays"]["primaryCare"],
@@ -327,14 +398,13 @@ def save_financial_data(plan_id: str, s3_key: str, vector_db_client: Client):
     }).execute()
     copays_id = copays_result.data[0]["id"]
 
-    # Update HealthPlan with relation IDs
-    print("updating health plan: ", plan_id)
+    # Update HealthPlan with copays ID
     db_client.from_("HealthPlan").update({
-        "premiumId": premium_id,
-        "deductiblesId": deductibles_id,
         "copaysId": copays_id,
         "updatedAt": datetime.now().isoformat()
     }).eq("id", plan_id).execute()
+
+    return copays_id
 
 def save_coverage_data(plan_id: str, s3_key: str, vector_db_client: Client):
     db_client = get_supabase_client()
@@ -374,7 +444,15 @@ def save_coverage_data(plan_id: str, s3_key: str, vector_db_client: Client):
     """
     embedding_response = openai.embeddings.create(
         model="text-embedding-ada-002",
-        input="Please extract the coinsurance, services coverage, exclusions, prior authorization required, claims and appeals, and disclaimers information from the plan."
+        input="""
+        Extract the following coverage information from the health insurance plan:
+        - Coinsurance (In-Network and Out-of-Network) - include the percentage
+        - Services Coverage (Preventive Care, Hospital Inpatient, Outpatient Surgery, Mental Health Outpatient, Telehealth)
+        - Exclusions
+        - Prior Authorization Required
+        - Claims and Appeals
+        - Disclaimers
+        """
     )
     embedding_vector = embedding_response.data[0].embedding
 
@@ -383,7 +461,7 @@ def save_coverage_data(plan_id: str, s3_key: str, vector_db_client: Client):
         {
             'query_embedding': embedding_vector,
             'match_threshold': 0.6,
-            'match_count': 5,
+            'match_count': 7,
             'file_name': s3_key
         }
     ).execute()
