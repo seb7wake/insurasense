@@ -18,4 +18,120 @@ model User {
   email     String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  jobs      Job[]
+}
+
+model Job {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  status    String
+  fileSize  Int?
+  s3Key     String
+  planId    String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model HealthPlan {
+  id                         String            @id @default(cuid()) // Auto-generated unique ID
+  planName                   String?
+  fileName                   String?
+  planType                   String?
+  coverageYear               String?
+  insurer                    Insurer?          @relation(fields: [insurerId], references: [id])
+  insurerId                  String?           @unique
+  premium                    Premium?          @relation(fields: [premiumId], references: [id])
+  premiumId                  String?           @unique
+  deductibles                Deductibles?      @relation(fields: [deductiblesId], references: [id])
+  deductiblesId              String?           @unique
+  copays                     Copays?           @relation(fields: [copaysId], references: [id])
+  copaysId                   String?           @unique
+  coinsurance                Coinsurance?      @relation(fields: [coinsuranceId], references: [id])
+  coinsuranceId              String?           @unique
+  servicesCoverage           ServicesCoverage? @relation(fields: [servicesCoverageId], references: [id])
+  servicesCoverageId         String?           @unique
+  exclusions                 String[]
+  priorAuthorizationRequired String[]
+  claimsAndAppeals           ClaimsAndAppeals? @relation(fields: [claimsAndAppealsId], references: [id])
+  claimsAndAppealsId         String?           @unique
+  disclaimers                String[]
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
+}
+
+model Insurer {
+  id         String      @id @default(cuid())
+  name       String
+  phone      String?
+  address    String?
+  website    String?
+  healthPlan HealthPlan?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+}
+
+model Premium {
+  id                   String      @id @default(cuid())
+  monthlyPremium       Float?
+  annualPremium        Float?
+  employerContribution Float?
+  healthPlan           HealthPlan?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+}
+
+model Deductibles {
+  id                  String      @id @default(cuid())
+  individualInNetwork Float?
+  familyInNetwork     Float?
+  individualOopMax    Float?
+  familyOopMax        Float?
+  healthPlan          HealthPlan?
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+}
+
+model Copays {
+  id                                 String      @id @default(cuid())
+  primaryCare                        Float?
+  specialist                         Float?
+  er                                 Float?
+  urgentCare                         Float?
+  prescriptionDrugsTier1Generic      Float?
+  prescriptionDrugsTier2Preferred    Float?
+  prescriptionDrugsTier3NonPreferred Float?
+  healthPlan                         HealthPlan?
+  createdAt                          DateTime    @default(now())
+  updatedAt                          DateTime    @updatedAt
+}
+
+model Coinsurance {
+  id           String      @id @default(cuid())
+  inNetwork    Float?
+  outOfNetwork Float?
+  healthPlan   HealthPlan?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+model ServicesCoverage {
+  id                     String      @id @default(cuid())
+  preventiveCare         String?
+  hospitalInpatient      String?
+  outpatientSurgery      String?
+  mentalHealthOutpatient String?
+  telehealth             String?
+  healthPlan             HealthPlan?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+}
+
+model ClaimsAndAppeals {
+  id                   String      @id @default(cuid())
+  claimFilingProcedure String?
+  appealsProcess       String?
+  healthPlan           HealthPlan?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
 }
